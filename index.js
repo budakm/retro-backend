@@ -26,9 +26,9 @@ app.use(function(req, res, next) {
 });
 
 const db = mysql.createConnection({
-  host: '51.75.170.80',
-  user: 'retrosql',
-  password: 'jo~0Fq41',
+  host: '34.71.181.254',
+  user: 'root',
+  password: 'wevJtbG5j5tp8C7E',
   database: 'retro'
 }).promise()
 
