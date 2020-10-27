@@ -20,7 +20,7 @@ node {
         sshagent(credentials : ['jenkins-deployer']) {
             sh "ssh -o StrictHostKeyChecking=no jenkins@10.10.1.24 \"docker pull budakdigital/wmr:${env.JOB_BASE_NAME}-${env.BUILD_NUMBER}\""
             sh "ssh -o StrictHostKeyChecking=no jenkins@10.10.1.24 \"docker stop ${env.JOB_BASE_NAME} && docker rm ${env.JOB_BASE_NAME}\""
-            sh "ssh -o StrictHostKeyChecking=no jenkins@10.10.1.24 \"docker run -d --name=${env.JOB_BASE_NAME} -p 80:80 budakdigital/wmr:${env.JOB_BASE_NAME}-${env.BUILD_NUMBER}\""
+            sh "ssh -o StrictHostKeyChecking=no jenkins@10.10.1.24 \"docker run -d --name=${env.JOB_BASE_NAME} -p 46991:46991 -p 46992:46992 budakdigital/wmr:${env.JOB_BASE_NAME}-${env.BUILD_NUMBER}\""
         }
     }
 
