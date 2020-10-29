@@ -5,9 +5,12 @@ const Pool = require('pg').Pool
 const WebSocket = require('ws')
 const wss = new WebSocket.Server({port: process.env.SOCKET_PORT})
 const uniqid = require('uniqid')
-
 const _ = require('lodash')
 const RetroError = require('./RetroError')
+require('dotenv').config()
+
+const port = process.env.PORT || 46992;
+const appMode = process.env.NODE_ENV || 'development';
 
 wss.on('connection', (ws, req) => {
   const ip = (req.headers['x-forwarded-for'] || '').split(/\s*,\s*/)[0]
@@ -55,18 +58,22 @@ const wssSendDt = (dt) => {
 /// Get Task List ////
 /// ////
 app.get('/tasks', async (req, res) => {
-
+  
   const token = req.headers['x-access-token'] || uniqid()
   const dt = (new Date).getTime()
   
   let tasks = []
+  let deletedTasks = []
+  
   const result = await db.query('SELECT * FROM tasks WHERE updated_at>$1 AND deleted_at=0 ORDER BY sort', [req.query.dt || 0], (err, response) => {
 
     if (err) {
-
+      console.log(err)
       throw new RetroError('Tasks are not loaded', 400)
 
-    } else {
+    } 
+    else 
+    {
 
       tasks = response.rows.map(item => ({
         ..._.omit(item, 'locked_by', 'locking_switch_requested_by'),
@@ -75,16 +82,17 @@ app.get('/tasks', async (req, res) => {
         edit_permission: item.locked_by === token,
         edit_permission_requested_by_someone_else: item.locked_by === token && !!item.locking_switch_requested_by
       }))
+    }
 
-      let deletedTasks = []
-      if (req.query.since) {
-        const rows = db.query('SELECT id FROM tasks WHERE deleted_at>$1', [req.query.since],  (err, response2) => {
-          if (response2) {
-            deletedTasks = response2.rows.map(item => item.id) 
-          }
-        })
-      
-      }
+    if (req.query.since) {
+      const rows = db.query('SELECT id FROM tasks WHERE deleted_at>$1', [req.query.since],  (err, deletedResponse) => {
+        if (deletedResponse) {
+          deletedTasks = deletedResponse.rows.map(item => item.id) 
+        }
+        res.send({tasks, dt, token, deletedTasks})
+      })
+    }
+    else {
       res.send({tasks, dt, token, deletedTasks})
     }
   })
@@ -258,22 +266,22 @@ app.patch('/tasks/:id/unlock', async (req, res) => {
 })
 
 /// ////
-/// Unlock Record ////
+/// Send Unlock Request ////
 /// ////
 app.patch('/tasks/:id/send_unlock_request', async (req, res) => {
   try {
-    const [[task]] = await db.query('select * from tasks where id=$1 and deleted_at=0', [req.params.id])
-    if (!task) {
+    const task = await db.query('SELECT * FROM tasks WHERE id=$1 and deleted_at=0', [req.params.id])
+    if (!task.rows[0]) {
       throw new RetroError('Task Not Found', 404)
     }
-    if (!task.locked_by || task.locked_by === req.headers['x-access-token']) {
+    if (task.rows[0] && !task.rows[0].locked_by || task.rows[0].locked_by === req.headers['x-access-token']) {
       throw new RetroError('The task is not locked', 400)
     }
-    if (task.locking_switch_requested_by === req.headers['x-access-token']) {
+    if (task.rows[0].locking_switch_requested_by === req.headers['x-access-token']) {
       throw new RetroError('You have already asked for the edit permission', 400)
     }
     const dt = (new Date).getTime()
-    await db.query('update tasks set locking_switch_requested_by=$1,locking_switch_requested_at=$2,updated_at=$3 where id=$4', [req.headers['x-access-token'], dt, dt, req.params.id])
+    await db.query('UPDATE tasks SET locking_switch_requested_by=$1,locking_switch_requested_at=$2,updated_at=$3 WHERE id=$4', [req.headers['x-access-token'], dt, dt, req.params.id])
     wssSendDt(dt)
     res.send()
   } catch (error) {
@@ -282,15 +290,18 @@ app.patch('/tasks/:id/send_unlock_request', async (req, res) => {
   }
 })
 
+/// ////
+/// Cancel Unlock Record ////
+/// ////
 app.patch('/tasks/:id/cancel_unlock_request', async (req, res) => {
   try {
-    const [[task]] = await db.query('select * from tasks where id=$1 and deleted_at=0', [req.params.id])
-    if (!task) {
+    const task = await db.query('SELECT * FROM tasks WHERE id=$1 and deleted_at=0', [req.params.id])
+    if (!task.rows[0]) {
       throw new RetroError('Task Not Found', 404)
     }
-    if (task.locking_switch_requested_by === req.headers['x-access-token']) {
+    if (task.rows[0].locking_switch_requested_by === req.headers['x-access-token']) {
       const dt = (new Date).getTime()
-      await db.query('update tasks set locking_switch_requested_by="",locking_switch_requested_at=0,updated_at=$1 where id=$2', [dt, req.params.id])
+      await db.query('UPDATE tasks SET locking_switch_requested_by=$1,locking_switch_requested_at=0,updated_at=$2 WHERE id=$3', ['',dt, req.params.id])
       wssSendDt(dt)
     }
     res.send()
@@ -300,18 +311,21 @@ app.patch('/tasks/:id/cancel_unlock_request', async (req, res) => {
   }
 })
 
+/// ////
+/// Try Unlock ////
+/// ////
 app.patch('/tasks/:id/try_unlock', async (req, res) => {
   try {
-    const [[task]] = await db.query('select * from tasks where id=$1 and deleted_at=0', [req.params.id])
-    if (!task) {
+    const task = await db.query('SELECT * FROM tasks WHERE id=$1 and deleted_at=0', [req.params.id])
+    if (!task.rows[0]) {
       throw new RetroError('Task Not Found', 404)
     }
-    if (task.locking_switch_requested_by === req.headers['x-access-token']) {
+    if (task.rows[0].locking_switch_requested_by === req.headers['x-access-token']) {
       const dt = (new Date).getTime()
-      if (dt > task.locking_switch_requested_at + 5000) {
+      if (dt > task.rows[0].locking_switch_requested_at + 5000) {
         await db.query(
-          'update tasks set locking_switch_requested_by="",locking_switch_requested_at=0,locked_by=$1,locked_at=$2,updated_at=$3 where id=$4',
-          [req.headers['x-access-token'], dt, dt, req.params.id]
+          'UPDATE tasks SET locking_switch_requested_by=$1,locking_switch_requested_at=0,locked_by=$2,locked_at=$3,updated_at=$4 WHERE id=$5',
+          ['',req.headers['x-access-token'], dt, dt, req.params.id]
         )
         wssSendDt(dt)
       } else {
@@ -327,11 +341,14 @@ app.patch('/tasks/:id/try_unlock', async (req, res) => {
   }
 })
 
+/// ////
+/// Deny Unlock ////
+/// ////
 app.patch('/tasks/:id/deny_unlock', async (req, res) => {
   try {
     const task = await checkIfTaskIsEditable(req.params.id, req)
     const dt = (new Date).getTime()
-    await db.query('update tasks set locking_switch_requested_by="",locking_switch_requested_at=0,updated_at=$1 where id=$2', [dt, task.id])
+    await db.query('UPDATE tasks SET locking_switch_requested_by=$1,locking_switch_requested_at=0,updated_at=$2 WHERE id=$3', ['',dt, task.id])
     wssSendDt(dt)
     res.send()
   } catch (error) {
@@ -340,11 +357,14 @@ app.patch('/tasks/:id/deny_unlock', async (req, res) => {
   }
 })
 
+/// ////
+/// Allow Unlock ////
+/// ////
 app.patch('/tasks/:id/allow_unlock', async (req, res) => {
   try {
     const task = await checkIfTaskIsEditable(req.params.id, req)
     const dt = (new Date).getTime()
-    await db.query('update tasks set locked_by=$1,locked_at=$2,locking_switch_requested_by="",locking_switch_requested_at=0,updated_at=$3 where id=$4', [dt.locking_switch_requested_by, dt, dt, task.id])
+    await db.query('UPDATE tasks SET locked_by=$1,locked_at=$2,locking_switch_requested_by=$3,locking_switch_requested_at=0,updated_at=$4 WHERE id=$5', [dt.locking_switch_requested_by, dt, '', dt, task.id])
     wssSendDt(dt)
     res.send()
   } catch (error) {
@@ -353,4 +373,6 @@ app.patch('/tasks/:id/allow_unlock', async (req, res) => {
   }
 })
 
-server.listen(process.env.PORT)
+server.listen(process.env.PORT, () => {
+  console.log(`Server is running on the port ${port} with mode ${appMode}.`);
+})
